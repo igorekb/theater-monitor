@@ -1,24 +1,16 @@
-# Theater Performance Monitor
+# Theater Monitor
 
-App that monitors Belarusian State Puppet Theater theater websites for new performances and sends automated notifications via Telegram
-
-## Theater Monitoring Bot
-
-### ✨ Features
-- 🔄 Automatically monitors theater website at configurable intervals
-- 🔔 Sends notifications via Telegram when new performances are added
-- 📱 Works with Telegram channels for public subscription
-- 🪵 Comprehensive logging system for monitoring and debugging
-- 💾 Persistent storage of performance data for reliable change detection
-- 🚀 Designed for deployment on VPS servers with minimal resource usage
+App that monitors Puppet Theater website for new performances and remind about new performances in Telegram
 
 ### 🔧 Requirements
 - Python 3.6+
-- pip packages:
+- pip:
   - requests
-  - beautifulsoup4 
+  - beautifulsoup4
+  - dotenv 
 - Telegram bot token
-- Linux/Unix system with cron (for scheduled execution)
+- Telegram channel
+- Linux VPS with cron 
 
 ### 🏗️ Installation
 
@@ -28,15 +20,15 @@ git clone https://github.com/igorekbs/theater-monitor.git
 cd theater-monitor
 ```
 
-#### 2. Use venv
+#### 2. Create venv and install dependencies
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install requests beautifulsoup4
+pip install requests beautifulsoup4 dotenv
 ```
 
-#### 3. Configure the Application
-Copy .env.example to .env and edit with your settings
+#### 3. Configure
+Copy .env.example to .env and add your settings
 
 
 ### 🚀 Usage
@@ -60,7 +52,7 @@ cat > run_monitor.sh << 'EOL'
 #!/bin/bash
 cd "$(dirname "$0")"
 source venv/bin/activate
-python main.py >> cron_execution.log 2>&1
+python3 main.py >> cron_execution.log 2>&1
 EOL
 
 chmod +x run_monitor.sh
@@ -78,7 +70,7 @@ Add the following line to run every 6 hours:
 ```
 
 ### 📄 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+Free to distibute under MIT License
 
 ### 🙏 Acknowledgements
 - Vibe-coded with Claude for puppet theater lovers
