@@ -1,6 +1,7 @@
 """Main entry point for the theater monitoring script"""
 import logging
 import argparse
+import sys
 from tce_monitor import check_for_new_tce_events
 
 
@@ -41,6 +42,7 @@ def main():
             logging.info("Completed: no new events")
     except Exception as e:
         logging.error(f"Error in main process: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

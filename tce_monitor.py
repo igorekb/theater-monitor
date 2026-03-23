@@ -258,61 +258,53 @@ def send_channel_post(message, disable_notification=True, use_test_channel=False
         return False
 
 
-def notify_tce_event_immediately(event, use_test_channel=False):
-    """Send immediate notification about a single TCE event"""
-    try:
+def _format_event_line(event) -> str:
+    """Format a single event as a compact line: title, date/time, link."""
+    line = f"<b>{event['title']}</b>"
+    if event.get('date') and event['date'] != 'Unknown':
+        dt = f"📅 {event['date']}"
+        if event.get('time') and event['time'] != 'Unknown':
+            dt += f" в {event['time']}"
+        line += f"\n{dt}"
+    elif event.get('time') and event['time'] != 'Unknown':
+        line += f"\n🕒 {event['time']}"
+    line += f"\n🎟 <a href='{event['url']}'>Билеты</a>"
+    return line
 
-        # Format message for single event
-        prefix = "🧪 [TEST] " if use_test_channel else ""
-        message = f"{prefix}🎭 <b>НОВОЕ МЕРОПРИЯТИЕ TCE.BY!</b> 🎭\n\n"
-        message += f"<b>{event['title']}</b>\n\n"
 
-        # Date and time on same line if both available
-        date_time_line = ""
-        if event.get('date') and event['date'] != 'Unknown':
-            date_time_line = f"📅 {event['date']}"
+def notify_tce_events(events, use_test_channel=False):
+    """Send new TCE events to Telegram, batching 10 events per message."""
+    BATCH_SIZE = 10
+    prefix = "🧪 [TEST] " if use_test_channel else ""
+    channel_username = config.TEST_TELEGRAM_CHANNEL_USERNAME if use_test_channel else config.TELEGRAM_CHANNEL_USERNAME
+    total = len(events)
+    batches = [events[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+    all_ok = True
 
-            if event.get('time') and event['time'] != 'Unknown':
-                date_time_line += f" в {event['time']}"
+    for batch_num, batch in enumerate(batches, 1):
+        try:
+            count = len(batch)
+            if total <= BATCH_SIZE:
+                header = f"{prefix}🎭 <b>НОВЫЙ СПЕКТАКЛЬ!</b>" if count == 1 else f"{prefix}🎭 <b>НОВЫЕ СПЕКТАКЛИ! ({count})</b>"
+            else:
+                header = f"{prefix}🎭 <b>НОВЫЕ СПЕКТАКЛИ! ({batch_num}/{len(batches)})</b>"
 
-            message += date_time_line + "\n"
-        elif event.get('time') and event['time'] != 'Unknown':
-            # Only time available
-            message += f"🕒 {event['time']}\n"
+            blocks = "\n\n".join(_format_event_line(e) for e in batch)
+            message = f"{header}\n\n{blocks}\n\n➖➖➖➖➖➖➖➖➖➖➖➖\nПодпишись {channel_username} для получения уведомлений!"
 
-        if event.get('venue') and event['venue'] != 'Unknown':
-            message += f"📍 {event['venue']}\n"
+            success = send_channel_post(message, disable_notification=False, use_test_channel=use_test_channel)
+            if success:
+                logging.info(f"✅ Notification sent (batch {batch_num}/{len(batches)}): {', '.join(e['title'] for e in batch)}")
+            else:
+                logging.error(f"❌ Failed to send notification batch {batch_num}/{len(batches)}")
+                all_ok = False
+            if batch_num < len(batches):
+                time.sleep(2)
+        except Exception as e:
+            logging.error(f"Error sending TCE notification batch {batch_num}: {e}")
+            all_ok = False
 
-        message += f"\n🎟 <a href='{event['url']}'>Подробнее и билеты</a>\n"
-
-        if event.get('description') and len(event['description']) > 10:
-            # Limit description to 300 characters
-            desc = event['description'][:300]
-            if len(event['description']) > 300:
-                desc += "..."
-            message += f"\n{desc}\n"
-
-        message += "\n➖➖➖➖➖➖➖➖➖➖➖➖\n"
-
-        # Use appropriate channel username
-        channel_username = config.TEST_TELEGRAM_CHANNEL_USERNAME if use_test_channel else config.TELEGRAM_CHANNEL_USERNAME
-        message += f"Подпишись {channel_username} для получения уведомлений!"
-
-        # Send notification
-        success = send_channel_post(message, disable_notification=False, use_test_channel=use_test_channel)
-
-        if success:
-            logging.info(f"✅ Immediate notification sent for TCE event ID {event['id']}: {event['title']}")
-            if event['date'] != 'Unknown':
-                logging.info(f"   📅 Date: {event['date']}" + (f" at {event['time']}" if event['time'] != 'Unknown' else ""))
-        else:
-            logging.error(f"❌ Failed to send immediate notification for TCE event ID {event['id']}")
-
-        return success
-
-    except Exception as e:
-        logging.error(f"Error sending immediate TCE notification: {e}")
-        return False
+    return all_ok
 
 
 def check_for_new_tce_events(use_test_channel=False, notify=True) -> list:
@@ -327,51 +319,48 @@ def check_for_new_tce_events(use_test_channel=False, notify=True) -> list:
     logging.info("Starting TCE.BY puppet theatre monitoring (search-API mode)")
     logging.info("=" * 60)
 
-    try:
-        # Step 1: get puppet theatre events from search API (single browser session)
-        api_events = fetch_puppet_events_from_api()
-        if not api_events:
-            logging.info("No puppet theatre events returned by search API")
-            return []
-
-        fetched_ids = {e['bk_id'] for e in api_events}
-
-        # Step 2: find which are new
-        processed_ids = load_processed_ids()
-        new_api_events = [e for e in api_events if e['bk_id'] not in processed_ids]
-        logging.info(f"API events: {len(api_events)}, already processed: {len(processed_ids)}, new: {len(new_api_events)}")
-
-        if not new_api_events:
-            logging.info("No new puppet theatre events")
-            save_processed_ids(processed_ids | fetched_ids)
-            return []
-
-        # Step 3: build and notify — no page fetches needed, data comes from API
-        new_events = []
-        for api_event in new_api_events:
-            try:
-                event = _build_event_from_api(api_event)
-                logging.info(f"  New event: {event['title']} on {event['date']} at {event['time']}")
-                if notify:
-                    notify_tce_event_immediately(event, use_test_channel=use_test_channel)
-                else:
-                    logging.info(f"  Skipping notification (--no-notify mode)")
-                save_single_tce_event(event)
-                new_events.append(event)
-                processed_ids.add(api_event['bk_id'])
-            except Exception as e:
-                logging.error(f"Error processing event bk_id={api_event.get('bk_id')}: {e}")
-                processed_ids.add(api_event.get('bk_id'))
-
-        # Step 4: persist updated processed IDs (all fetched, including already-seen)
-        save_processed_ids(processed_ids | fetched_ids)
-
-        logging.info(f"Done. Found and notified {len(new_events)} new puppet theatre events")
-        return new_events
-
-    except Exception as e:
-        logging.error(f"Error in check_for_new_puppet_events: {e}")
+    # Step 1: get puppet theatre events from search API (single browser session)
+    api_events = fetch_puppet_events_from_api()
+    if not api_events:
+        logging.info("No puppet theatre events returned by search API")
         return []
+
+    fetched_ids = {e['bk_id'] for e in api_events}
+
+    # Step 2: find which are new
+    processed_ids = load_processed_ids()
+    new_api_events = [e for e in api_events if e['bk_id'] not in processed_ids]
+    logging.info(f"API events: {len(api_events)}, already processed: {len(processed_ids)}, new: {len(new_api_events)}")
+
+    if not new_api_events:
+        logging.info("No new puppet theatre events")
+        save_processed_ids(processed_ids | fetched_ids)
+        return []
+
+    # Step 3: build events
+    new_events = []
+    for api_event in new_api_events:
+        try:
+            event = _build_event_from_api(api_event)
+            logging.info(f"  New event: {event['title']} on {event['date']} at {event['time']}")
+            save_single_tce_event(event)
+            new_events.append(event)
+            processed_ids.add(api_event['bk_id'])
+        except Exception as e:
+            logging.error(f"Error processing event bk_id={api_event.get('bk_id')}: {e}")
+            processed_ids.add(api_event.get('bk_id'))
+
+    # Step 4: send one combined notification for all new events
+    if notify and new_events:
+        notify_tce_events(new_events, use_test_channel=use_test_channel)
+    elif new_events:
+        logging.info(f"  Skipping notification (--no-notify mode)")
+
+    # Step 5: persist updated processed IDs (all fetched, including already-seen)
+    save_processed_ids(processed_ids | fetched_ids)
+
+    logging.info(f"Done. Found and notified {len(new_events)} new puppet theatre events")
+    return new_events
 
 
 def save_single_tce_event(event):
