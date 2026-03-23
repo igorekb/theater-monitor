@@ -3,7 +3,7 @@
 ## Step-by-Step Instructions
 
 ### 1. Add Bot to Test Channel
-1. Open the test channel: https://t.me/+rOY2zTmEcNo0ZGIy
+1. Create a Telegram channel (or use an existing one) for testing
 2. Add your bot as an administrator to this channel
 3. Give the bot permission to "Post messages"
 
@@ -55,13 +55,6 @@ Replace the values with what you got from `get_channel_id.py`.
 Run the monitor with the `--test-channel` flag:
 
 ```bash
-# Test with puppet-minsk.by only
-python main.py --puppet-only --test-channel
-
-# Test with tce.by only (may take a few minutes)
-python main.py --tce-only --test-channel
-
-# Test both sites
 python main.py --test-channel
 ```
 

@@ -1,198 +1,125 @@
-# TCE.BY Scanning Logic - Visual Guide
+# TCE.BY Monitoring Logic
 
 ## Overview
 
-The TCE.BY scanner uses a **range-based approach** that always checks 10 IDs ahead of the last found event.
+Events are discovered via a **search API** — one POST request per calendar month —
+rather than scanning sequential numeric IDs. A processed-IDs set prevents duplicate
+notifications across runs.
 
-## Key Concept: Base ID
+---
 
-- **Base ID** = Last found event ID (or config default on first run)
-- Always checks next 10 IDs from base: `[base+1, base+2, ..., base+10]`
-- When event found, that ID becomes new base
-- Stops when no events found in 10 ID range
-
-## Visual Example
+## Flow Per Run
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ ITERATION 1: Base = 4070                                    │
-├─────────────────────────────────────────────────────────────┤
-│ Check IDs: 4071 → 4080                                      │
-│                                                              │
-│ 4071 [404] ────┐                                            │
-│ 4072 [404]     │                                            │
-│ 4073 [EVENT]   ├─→ Events found!                            │
-│ 4074 [404]     │   Highest ID: 4075                         │
-│ 4075 [EVENT] ──┘                                            │
-│ 4076 [404]                                                  │
-│ 4077 [404]                                                  │
-│ 4078 [404]                                                  │
-│ 4079 [404]                                                  │
-│ 4080 [404]                                                  │
-│                                                              │
-│ Result: Update base to 4075                                 │
-└─────────────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────────────┐
-│ ITERATION 2: Base = 4075 (from highest found)              │
-├─────────────────────────────────────────────────────────────┤
-│ Check IDs: 4076 → 4085                                      │
-│                                                              │
-│ 4076 [404]                                                  │
-│ 4077 [404]                                                  │
-│ 4078 [404]                                                  │
-│ 4079 [404]                                                  │
-│ 4080 [404]     Event found!                                 │
-│ 4081 [404]     Highest ID: 4082                             │
-│ 4082 [EVENT] ──┘                                            │
-│ 4083 [404]                                                  │
-│ 4084 [404]                                                  │
-│ 4085 [404]                                                  │
-│                                                              │
-│ Result: Update base to 4082                                 │
-└─────────────────────────────────────────────────────────────┘
-                        ↓
-┌─────────────────────────────────────────────────────────────┐
-│ ITERATION 3: Base = 4082                                    │
-├─────────────────────────────────────────────────────────────┤
-│ Check IDs: 4083 → 4092                                      │
-│                                                              │
-│ 4083 [404]                                                  │
-│ 4084 [404]                                                  │
-│ 4085 [404]                                                  │
-│ 4086 [404]                                                  │
-│ 4087 [404]     No events found                              │
-│ 4088 [404]     in this range                                │
-│ 4089 [404]                                                  │
-│ 4090 [404]                                                  │
-│ 4091 [404]                                                  │
-│ 4092 [404]                                                  │
-│                                                              │
-│ Result: STOP - Save base 4082                               │
-└─────────────────────────────────────────────────────────────┘
-                        ↓
-            Next run starts from 4082
-            (will check 4083-4092 again)
+1. Open Playwright browser (Anubis bypass)
+   └─ Navigate to tce.by homepage → tce.by/search.html
+      └─ Anubis JS proof-of-work completes (~4–8s)
+
+2. For each month window (current month, +1, +2, ... up to TCE_MONTHS_AHEAD):
+   └─ POST /index.php?view=shows&action=find&kind=text
+      body: server_key=<TCE_BASE_PARAM>, date_begin=YYYY-MM-DD, date_end=YYYY-MM-DD
+   └─ If response has 0 events → STOP (no point checking further months)
+   └─ Collect all returned events, deduplicate by bk_id
+
+3. Load data/tce_processed_ids.json  (set of already-seen bk_id values)
+
+4. new_events = [e for e in fetched if e.bk_id not in processed_ids]
+
+5. For each new event:
+   └─ Build notification from API fields (no individual page fetch needed)
+   └─ Send Telegram notification immediately
+   └─ Append to data/tce_events.json
+
+6. Save updated processed_ids (all fetched IDs, including already-seen)
 ```
 
-## Comparison: Old vs New Logic
+---
 
-### Old Logic (Consecutive 404s)
+## Month Window Visual
+
 ```
-Start: 4070
-4070 → Event (404 count: 0)
-4071 → 404 (404 count: 1)
-4072 → 404 (404 count: 2)
-...
-4080 → 404 (404 count: 10)
-STOP
+Today: 2026-03-23, TCE_MONTHS_AHEAD = 4
 
-Problem: If event at 4085, we'd miss it!
-```
-
-### New Logic (Range-Based)
-```
-Base: 4070
-Check 4071-4080 → No events
-STOP
-
-But next run:
-Base: 4070 (unchanged)
-Check 4071-4080 again
-
-If event added at 4075:
-Base: 4070
-Check 4071-4080 → Found 4075!
-Base: 4075
-Check 4076-4085 → Would find 4085!
+Request 1: date_begin=2026-03-23  date_end=2026-03-31  →  N events  → continue
+Request 2: date_begin=2026-04-01  date_end=2026-04-30  →  N events  → continue
+Request 3: date_begin=2026-05-01  date_end=2026-05-31  →  N events  → continue
+Request 4: date_begin=2026-06-01  date_end=2026-06-30  →  0 events  → STOP
+(Requests for July and beyond are skipped)
 ```
 
-## Advantages
+Note: The first month always starts from **today** (not the 1st) to skip past events.
 
-### 1. No Skipped IDs
-Always checks every ID in the 10 ID window ahead of base.
+---
 
-### 2. Smart Continuation
-When event found at ID X, immediately checks 10 IDs from X.
+## Deduplication
 
-### 3. Handles Sparse Events
-Works efficiently even if events are spread out:
 ```
-Events at: 4070, 4080, 4090
-
-Iteration 1: Base 4070, check 4071-4080 → Find 4080
-Iteration 2: Base 4080, check 4081-4090 → Find 4090
-Iteration 3: Base 4090, check 4091-4100 → None
-Stop at 4090
+tce_processed_ids.json:
+{
+  "processed_ids": [4406, 4407, 4408, ..., 4644]
+}
 ```
 
-### 4. Re-checks Same Range
-If no events found, next run checks same range again.
-Perfect for catching newly added events.
+- On each run: `new = fetched_ids - processed_ids`
+- After notifying: `processed_ids |= fetched_ids` (union — marks all current events as seen)
+- An event is notified **exactly once**, even if it appears in multiple runs
+
+---
+
+## API Response Structure
+
+```json
+{
+  "data": [
+    {
+      "bk_id":       4552,
+      "server_key":  "RkZDMTE2MUQ...",
+      "show_name":   "Название спектакля",
+      "bk_date":     "2026-04-15 19:00:00",
+      "hall_name":   "Название зала",
+      "hall_address":"ул. Примерная, 1",
+      "owner_name":  "Название театра"
+    },
+    ...
+  ],
+  "success": true
+}
+```
+
+The `server_key` is sent as a POST parameter to filter server-side — only puppet
+theatre events are returned. No client-side filtering is needed.
+
+---
+
+## Why Not ID Scanning?
+
+The previous approach incremented numeric IDs (checking `?data=4071`, `?data=4072`, …)
+and tracked a watermark. This was replaced because:
+
+- The search API returns **all events directly** — no need to guess IDs
+- Event data (title, date, venue) comes from the API — **no individual page fetches**
+- Simpler state: a set of seen IDs vs. a fragile watermark that could skip events
+- Fewer requests: 2–4 API calls per run vs. 10+ page loads
+
+---
 
 ## Configuration
 
 ```python
 # config.py
-TCE_START_ID = 4070      # Initial base (first run only)
-TCE_ID_RANGE = 10        # How many IDs to check ahead
+TCE_BASE_PARAM    = "RkZDMTE2MUQ..."  # puppet theatre server_key
+TCE_SEARCH_API_URL = "https://tce.by/index.php?view=shows&action=find&kind=text"
+TCE_MONTHS_AHEAD  = 4                 # current month + 4 future months (hard cap)
 ```
 
-## Real-World Scenarios
+---
 
-### Scenario 1: New Event Added Daily
-```
-Day 1: Base 4070, check 4071-4080 → Find 4075
-       Base 4075, check 4076-4085 → None
-       Save base: 4075
+## State Files
 
-Day 2: Base 4075, check 4076-4085 → Find 4081
-       Base 4081, check 4082-4091 → None
-       Save base: 4081
+| File | Purpose |
+|------|---------|
+| `data/tce_processed_ids.json` | Set of `bk_id` values already notified |
+| `data/tce_events.json` | Full event details (audit log) |
 
-Result: Catches each new event and moves forward
-```
-
-### Scenario 2: Multiple Events in Batch
-```
-Events added at: 4073, 4075, 4078
-
-Run: Base 4070, check 4071-4080
-     → Find 4073, 4075, 4078
-     → Highest: 4078
-     Base 4078, check 4079-4088
-     → None
-     Save base: 4078
-
-Result: Finds all events in one run!
-```
-
-### Scenario 3: Large Gap Between Events
-```
-Events at: 4070, 4095 (25 IDs apart)
-
-Run 1: Base 4070, check 4071-4080 → None
-       Save base: 4070
-
-Run 2: Base 4070, check 4071-4080 → None
-       Save base: 4070
-
-Eventually: Event added at 4075
-Run N: Base 4070, check 4071-4080 → Find 4075
-       Base 4075, check 4076-4085 → None
-       Base 4085, check 4086-4095 → Find 4095!
-
-Result: Will eventually find 4095 through progressive checking
-```
-
-## Summary
-
-| Feature | Old Logic | New Logic |
-|---------|-----------|-----------|
-| Stop condition | 10 consecutive 404s | No events in 10 ID range |
-| ID skipping | Possible | Never |
-| Continuation | Linear +1 | Jump to highest found |
-| Re-checking | No | Yes (same range if no events) |
-| Efficiency | Good for dense | Good for any distribution |
-
-The new logic is more robust and adapts to any event distribution pattern!
+Use `python manage_processed_ids.py --show` to inspect state,
+`--clear` to reset (next run re-notifies all current events).
